@@ -45,7 +45,10 @@ class ProteinRecord:
         if self.organism is None and self.description:
             org_match = re.search(r'OS=([^=]+?)(?:\s+[A-Z]{2}=|$)', self.description)
             if org_match:
-                self.organism = org_match.group(1).strip()
+                organism_part = org_match.group(1).strip()
+                # Remove temperature info if it got included
+                organism_clean = re.sub(r'\s+temp[:\s]*[0-9.]+.*$', '', organism_part, flags=re.IGNORECASE)
+                self.organism = organism_clean.strip()
 
 
 class TemStaProReader:
