@@ -8,7 +8,32 @@ __email__ = "your.email@example.com"
 
 from .encoding import ProteinEncoder
 from .optimization import OptunaLSTMOptimizer
-from .data_reader import TemStaProReader, ProteinRecord, quick_load_training, quick_load_testing, quick_load_validation
-from .peptide_encoder import PeptideEncoder, ModifiedResidue, ModificationType, encode_peptide, encode_peptide_batch
+from .data_reader import (
+    TemStaProReader,
+    ProteinRecord,
+    quick_load_training,
+    quick_load_testing,
+    quick_load_validation,
+)
+from .peptide_encoder import (
+    PeptideEncoder,
+    ModifiedResidue,
+    ModificationType,
+    encode_peptide,
+    encode_peptide_batch,
+)
 
-__all__ = ["ProteinEncoder", "OptunaLSTMOptimizer", "TemStaProReader", "ProteinRecord", "quick_load_training", "quick_load_testing", "quick_load_validation", "PeptideEncoder", "ModifiedResidue", "ModificationType", "encode_peptide", "encode_peptide_batch"]
+__all__ = [
+    "ProteinEncoder",
+    "OptunaLSTMOptimizer",
+    "TemStaProReader",
+    "ProteinRecord",
+    "quick_load_training",
+    "quick_load_testing",
+    "quick_load_validation",
+    "PeptideEncoder",
+    "ModifiedResidue",
+    "ModificationType",
+    "encode_peptide",
+    "encode_peptide_batch",
+]
