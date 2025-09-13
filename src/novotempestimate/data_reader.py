@@ -35,13 +35,27 @@ class ProteinRecord:
         """Calculate sequence length after initialization."""
         self.length = len(self.sequence)
 
-        # Extract temperature from description if available
-        if self.temperature is None and self.description:
-            temp_match = re.search(
-                r"temp[erature]*[:\s=]*([0-9.]+)", self.description.lower()
-            )
-            if temp_match:
-                self.temperature = float(temp_match.group(1))
+        # Extract temperature from description or ID if available
+        if self.temperature is None:
+            # Try to extract from description first
+            if self.description:
+                temp_match = re.search(
+                    r"temp[erature]*[:\s=]*([0-9.]+)", self.description.lower()
+                )
+                if temp_match:
+                    self.temperature = float(temp_match.group(1))
+            
+            # If not found in description, try to extract from ID (format: xxx|xxx|temperature)
+            if self.temperature is None and self.id:
+                id_parts = self.id.split('|')
+                if len(id_parts) >= 3:
+                    try:
+                        # Last part is often the temperature
+                        temp_candidate = id_parts[-1].strip()
+                        if temp_candidate.replace('.', '').isdigit():
+                            self.temperature = float(temp_candidate)
+                    except (ValueError, IndexError):
+                        pass
 
         # Extract organism from description if available
         if self.organism is None and self.description:
