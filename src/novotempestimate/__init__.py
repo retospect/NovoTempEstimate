@@ -12,12 +12,18 @@ from .encoding import ProteinEncoder
 from .optimization import OptunaLSTMOptimizer
 from .data_reader import TemStaProReader, ProteinRecord
 from .peptide_encoder import PeptideEncoder, ModifiedResidue
-from .model import ProteinTemperatureLSTM, TemperatureLoss, create_model, load_model, save_model
+from .model import (
+    ProteinTemperatureLSTM,
+    TemperatureLoss,
+    create_model,
+    load_model,
+    save_model,
+)
 from .trainer import ProteinTemperatureTrainer, TrainingConfig, ProteinDataset
 
 __all__ = [
     "ProteinEncoder",
-    "OptunaLSTMOptimizer", 
+    "OptunaLSTMOptimizer",
     "TemStaProReader",
     "ProteinRecord",
     "PeptideEncoder",
@@ -25,9 +31,9 @@ __all__ = [
     "ProteinTemperatureLSTM",
     "TemperatureLoss",
     "create_model",
-    "load_model", 
+    "load_model",
     "save_model",
     "ProteinTemperatureTrainer",
     "TrainingConfig",
-    "ProteinDataset"
+    "ProteinDataset",
 ]

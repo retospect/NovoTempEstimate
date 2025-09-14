@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Training script for protein temperature prediction model.
+Training script for CNN-based protein temperature prediction model.
 
-This script provides a command-line interface for training the LSTM-based
-protein temperature prediction model with configurable parameters.
+This script provides a command-line interface for training the CNN model
+with positional encoding and 2D grid representations.
 
 Usage:
-    python scripts/train_model.py [options]
+    python scripts/train_cnn_model.py [options]
 
 Example:
-    python scripts/train_model.py --epochs 50 --batch-size 64 --sample-size 10000
+    python scripts/train_cnn_model.py --epochs 50 --batch-size 16 --model-type cnn_basic
 """
 
 import argparse
@@ -21,44 +21,58 @@ import torch
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from novotempestimate.trainer import ProteinTemperatureTrainer, TrainingConfig
+from novotempestimate.cnn_trainer import CNNProteinTemperatureTrainer, CNNTrainingConfig
 
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Train protein temperature prediction model",
+        description="Train CNN protein temperature prediction model",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     # Model parameters
     model_group = parser.add_argument_group("Model Parameters")
     model_group.add_argument(
-        "--lstm-hidden-size", type=int, default=128, help="LSTM hidden layer size"
+        "--model-type",
+        type=str,
+        default="cnn_basic",
+        choices=["cnn_basic", "cnn_advanced"],
+        help="Type of CNN model",
     )
     model_group.add_argument(
-        "--lstm-layers", type=int, default=2, help="Number of LSTM layers"
-    )
-    model_group.add_argument(
-        "--fc-hidden-size",
+        "--embedding-dim",
         type=int,
-        default=128,
-        help="Fully connected layer size (as per paper)",
+        default=64,
+        help="Dimension of positional embeddings",
     )
     model_group.add_argument(
-        "--fc-layers", type=int, default=3, help="Number of FC layers (as per paper)"
+        "--grid-size", type=int, default=32, help="Size of 2D grid representation"
+    )
+    model_group.add_argument(
+        "--cnn-channels",
+        type=int,
+        nargs="+",
+        default=[1024, 512, 512, 128],
+        help="CNN channel sizes (4 layers as per spec)",
+    )
+    model_group.add_argument(
+        "--kernel-size", type=int, default=3, help="Convolution kernel size"
     )
     model_group.add_argument(
         "--dropout", type=float, default=0.3, help="Dropout probability"
     )
     model_group.add_argument(
-        "--no-bidirectional", action="store_true", help="Disable bidirectional LSTM"
+        "--max-length", type=int, default=2000, help="Maximum sequence length"
     )
 
     # Training parameters
     train_group = parser.add_argument_group("Training Parameters")
     train_group.add_argument(
-        "--batch-size", type=int, default=32, help="Batch size for training"
+        "--batch-size",
+        type=int,
+        default=16,
+        help="Batch size (smaller for CNN due to memory)",
     )
     train_group.add_argument(
         "--learning-rate", type=float, default=0.001, help="Learning rate"
@@ -75,9 +89,6 @@ def parse_arguments():
 
     # Data parameters
     data_group = parser.add_argument_group("Data Parameters")
-    data_group.add_argument(
-        "--max-length", type=int, default=1000, help="Maximum sequence length"
-    )
     data_group.add_argument(
         "--train-split", type=float, default=0.8, help="Training data split ratio"
     )
@@ -153,11 +164,11 @@ def parse_arguments():
     output_group.add_argument(
         "--output-dir",
         type=str,
-        default="models",
+        default="cnn_models",
         help="Output directory for models and logs",
     )
     output_group.add_argument(
-        "--log-freq", type=int, default=100, help="Logging frequency (batches)"
+        "--log-freq", type=int, default=50, help="Logging frequency (batches)"
     )
     output_group.add_argument(
         "--val-freq", type=int, default=1, help="Validation frequency (epochs)"
@@ -191,29 +202,29 @@ def load_config_from_file(config_path: str) -> dict:
         return json.load(f)
 
 
-def save_config_to_file(config: TrainingConfig, config_path: str):
+def save_config_to_file(config: CNNTrainingConfig, config_path: str):
     """Save configuration to JSON file."""
     with open(config_path, "w") as f:
         json.dump(config.__dict__, f, indent=2)
 
 
-def create_config_from_args(args) -> TrainingConfig:
-    """Create training configuration from command line arguments."""
-    config = TrainingConfig(
+def create_config_from_args(args) -> CNNTrainingConfig:
+    """Create CNN training configuration from command line arguments."""
+    config = CNNTrainingConfig(
         # Model parameters
-        lstm_hidden_size=args.lstm_hidden_size,
-        lstm_num_layers=args.lstm_layers,
-        fc_hidden_size=args.fc_hidden_size,
-        fc_num_layers=args.fc_layers,
+        model_type=args.model_type,
+        embedding_dim=args.embedding_dim,
+        grid_size=args.grid_size,
+        cnn_channels=args.cnn_channels,
+        kernel_size=args.kernel_size,
         dropout=args.dropout,
-        bidirectional=not args.no_bidirectional,
+        max_sequence_length=args.max_length,
         # Training parameters
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         num_epochs=args.epochs,
         weight_decay=args.weight_decay,
         # Data parameters
-        max_sequence_length=args.max_length,
         train_split=args.train_split,
         val_split=args.val_split,
         test_split=1.0 - args.train_split - args.val_split,
@@ -238,7 +249,7 @@ def create_config_from_args(args) -> TrainingConfig:
 
 
 def main():
-    """Main training function."""
+    """Main CNN training function."""
     args = parse_arguments()
 
     # Set random seed
@@ -248,7 +259,7 @@ def main():
     if args.config:
         print(f"Loading configuration from {args.config}")
         config_dict = load_config_from_file(args.config)
-        config = TrainingConfig(**config_dict)
+        config = CNNTrainingConfig(**config_dict)
     else:
         config = create_config_from_args(args)
 
@@ -258,11 +269,11 @@ def main():
         print(f"Configuration saved to {args.save_config}")
 
     # Print configuration
-    print("Training Configuration:")
-    print("=" * 50)
+    print("CNN Training Configuration:")
+    print("=" * 60)
     for key, value in config.__dict__.items():
         print(f"{key:25}: {value}")
-    print("=" * 50)
+    print("=" * 60)
 
     # Check device availability
     if torch.backends.mps.is_available():
@@ -273,7 +284,7 @@ def main():
         print("⚠️  No GPU acceleration available, using CPU")
 
     # Create trainer
-    trainer = ProteinTemperatureTrainer(config, args.output_dir)
+    trainer = CNNProteinTemperatureTrainer(config, args.output_dir)
 
     try:
         # Load data
@@ -283,29 +294,41 @@ def main():
         )
 
         # Setup model
-        print("🔄 Setting up model...")
+        print("🔄 Setting up CNN model...")
         trainer.setup_model()
 
         # Start training
-        print("🚀 Starting training...")
+        print("🚀 Starting CNN training...")
         results = trainer.train(train_loader, val_loader)
 
         # Print results
-        print("\n" + "=" * 50)
-        print("Training Results:")
+        print("\n" + "=" * 60)
+        print("CNN Training Results:")
         print(f"Best validation loss: {results['best_val_loss']:.4f}")
         print(f"Training time: {results['training_time']:.2f} seconds")
         print(f"Final epoch: {results['final_epoch']}")
-        print("=" * 50)
+        print("=" * 60)
 
         # Evaluate on test set
-        print("\n🔄 Evaluating on test set...")
+        print("\n🔄 Evaluating CNN on test set...")
         test_loss, test_mae = trainer.validate(test_loader)
         print(f"Test Loss: {test_loss:.4f}")
         print(f"Test MAE: {test_mae:.2f}°C")
 
-        print(f"\n✅ Training completed! Models saved to: {args.output_dir}")
-        print(f"📊 Training history saved to: {args.output_dir}/training_history.json")
+        print(f"\n✅ CNN training completed! Models saved to: {args.output_dir}")
+        print(
+            f"📊 Training history saved to: {args.output_dir}/cnn_training_history.json"
+        )
+
+        # Model comparison info
+        print(f"\n🧠 Model Architecture:")
+        print(f"   Type: {config.model_type}")
+        print(f"   Embedding dim: {config.embedding_dim}")
+        print(f"   Grid size: {config.grid_size}x{config.grid_size}")
+        print(f"   CNN channels: {config.cnn_channels}")
+        print(
+            f"   Total parameters: {trainer.model.get_model_info()['total_parameters']:,}"
+        )
 
     except KeyboardInterrupt:
         print("\n⚠️  Training interrupted by user")

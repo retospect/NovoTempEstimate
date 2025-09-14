@@ -1,49 +1,48 @@
 """
-Training system for protein temperature prediction model.
+CNN-specific training system for protein temperature prediction.
 
-This module implements the training pipeline with best practices including
-data loading, validation, early stopping, and model checkpointing.
+This module implements training pipeline specifically designed for CNN models
+that use positional encoding and 2D grid representations.
 """
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import DataLoader, TensorDataset, random_split, Dataset
 import numpy as np
-import pandas as pd
-from pathlib import Path
-import json
 import time
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import logging
 from tqdm import tqdm
+from pathlib import Path
 
-from .model import ProteinTemperatureLSTM, TemperatureLoss, save_model
+from .cnn_model import ProteinTemperatureCNN, ProteinTemperatureCNNAdvanced
+from .model import TemperatureLoss
 from .data_reader import TemStaProReader, ProteinRecord
-from .peptide_encoder import PeptideEncoder
+from .model_factory import ModelFactory
 
 
 @dataclass
-class TrainingConfig:
-    """Configuration for training."""
+class CNNTrainingConfig:
+    """Configuration for CNN training."""
 
     # Model parameters
-    lstm_hidden_size: int = 128
-    lstm_num_layers: int = 2
-    fc_hidden_size: int = 128
-    fc_num_layers: int = 3
+    embedding_dim: int = 64
+    grid_size: int = 32
+    cnn_channels: List[int] = None
+    kernel_size: int = 3
     dropout: float = 0.3
-    bidirectional: bool = True
+    max_sequence_length: int = 2000
+    model_type: str = "cnn_basic"  # "cnn_basic" or "cnn_advanced"
 
     # Training parameters
-    batch_size: int = 32
+    batch_size: int = 16  # Smaller batch size for CNN due to memory requirements
     learning_rate: float = 0.001
     num_epochs: int = 100
     weight_decay: float = 1e-5
 
     # Data parameters
-    max_sequence_length: int = 1000
     train_split: float = 0.8
     val_split: float = 0.1
     test_split: float = 0.1
@@ -65,35 +64,32 @@ class TrainingConfig:
     scheduler_factor: float = 0.5
 
     # Logging
-    log_frequency: int = 100
+    log_frequency: int = 50
     validate_frequency: int = 1
 
+    def __post_init__(self):
+        """Set default CNN channels if not provided."""
+        if self.cnn_channels is None:
+            self.cnn_channels = [1024, 512, 512, 128]
 
-class ProteinDataset(Dataset):
-    """Dataset for protein sequences and temperatures."""
 
-    def __init__(
-        self,
-        records: List[ProteinRecord],
-        encoder: PeptideEncoder,
-        max_length: Optional[int] = None,
-    ):
+class CNNProteinDataset(Dataset):
+    """Dataset for CNN models that work with raw sequences."""
+
+    def __init__(self, records: List[ProteinRecord], max_length: Optional[int] = None):
         """
         Initialize the dataset.
 
         Args:
             records: List of protein records
-            encoder: Peptide encoder for sequence encoding
             max_length: Maximum sequence length (sequences will be truncated)
         """
         self.records = records
-        self.encoder = encoder
         self.max_length = max_length
 
         # Pre-process data
         self.sequences = []
         self.temperatures = []
-        self.lengths = []
 
         for record in records:
             sequence = record.sequence
@@ -102,67 +98,50 @@ class ProteinDataset(Dataset):
 
             self.sequences.append(sequence)
             self.temperatures.append(float(record.temperature))
-            self.lengths.append(len(sequence))
 
     def __len__(self) -> int:
         return len(self.sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor]:
         """
         Get a single item from the dataset.
 
         Returns:
-            Tuple of (encoded_sequence, temperature, sequence_length)
+            Tuple of (sequence_string, temperature)
         """
         sequence = self.sequences[idx]
         temperature = self.temperatures[idx]
-        length = self.lengths[idx]
 
-        # Encode sequence
-        encoded = self.encoder.encode_sequence(sequence)
-
-        return encoded, torch.tensor(temperature, dtype=torch.float32), length
+        return sequence, torch.tensor(temperature, dtype=torch.float32)
 
 
-def collate_fn(
-    batch: List[Tuple[torch.Tensor, torch.Tensor, int]],
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def cnn_collate_fn(
+    batch: List[Tuple[str, torch.Tensor]],
+) -> Tuple[List[str], torch.Tensor]:
     """
-    Collate function for DataLoader to handle variable-length sequences.
+    Collate function for CNN DataLoader.
 
     Args:
-        batch: List of (sequence, temperature, length) tuples
+        batch: List of (sequence, temperature) tuples
 
     Returns:
-        Tuple of (padded_sequences, temperatures, lengths)
+        Tuple of (sequences_list, temperatures_tensor)
     """
-    sequences, temperatures, lengths = zip(*batch)
-
-    # Get maximum length in batch
-    max_len = max(lengths)
-    vocab_size = sequences[0].size(1)
-
-    # Pad sequences
-    padded_sequences = torch.zeros(len(sequences), max_len, vocab_size)
-    for i, seq in enumerate(sequences):
-        seq_len = seq.size(0)
-        padded_sequences[i, :seq_len] = seq
-
+    sequences, temperatures = zip(*batch)
     temperatures = torch.stack(temperatures)
-    lengths = torch.tensor(lengths)
 
-    return padded_sequences, temperatures, lengths
+    return list(sequences), temperatures
 
 
-class ProteinTemperatureTrainer:
-    """Trainer for protein temperature prediction model."""
+class CNNProteinTemperatureTrainer:
+    """Trainer specifically for CNN protein temperature prediction models."""
 
-    def __init__(self, config: TrainingConfig, output_dir: str = "models"):
+    def __init__(self, config: CNNTrainingConfig, output_dir: str = "cnn_models"):
         """
-        Initialize the trainer.
+        Initialize the CNN trainer.
 
         Args:
-            config: Training configuration
+            config: CNN training configuration
             output_dir: Directory to save models and logs
         """
         self.config = config
@@ -173,7 +152,6 @@ class ProteinTemperatureTrainer:
         self.setup_logging()
 
         # Initialize components
-        self.encoder = None
         self.model = None
         self.optimizer = None
         self.scheduler = None
@@ -199,7 +177,9 @@ class ProteinTemperatureTrainer:
 
     def setup_logging(self):
         """Setup logging configuration."""
-        log_file = self.output_dir / "training.log"
+        from pathlib import Path
+
+        log_file = self.output_dir / "cnn_training.log"
 
         logging.basicConfig(
             level=logging.INFO,
@@ -212,7 +192,7 @@ class ProteinTemperatureTrainer:
         self, data_pattern: str = "*training*", sample_size: Optional[int] = None
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
-        Load and prepare data for training.
+        Load and prepare data for CNN training.
 
         Args:
             data_pattern: Pattern to match data files
@@ -221,10 +201,7 @@ class ProteinTemperatureTrainer:
         Returns:
             Tuple of (train_loader, val_loader, test_loader)
         """
-        self.logger.info("Loading protein data...")
-
-        # Initialize encoder
-        self.encoder = PeptideEncoder(include_modifications=True)
+        self.logger.info("Loading protein data for CNN training...")
 
         # Load data
         records = []
@@ -244,7 +221,7 @@ class ProteinTemperatureTrainer:
         self.logger.info(f"Loaded {len(records)} protein records")
 
         # Create dataset
-        dataset = ProteinDataset(records, self.encoder, self.config.max_sequence_length)
+        dataset = CNNProteinDataset(records, self.config.max_sequence_length)
 
         # Split data
         total_size = len(dataset)
@@ -267,7 +244,7 @@ class ProteinTemperatureTrainer:
             train_dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
-            collate_fn=collate_fn,
+            collate_fn=cnn_collate_fn,
             num_workers=0,
         )
 
@@ -275,7 +252,7 @@ class ProteinTemperatureTrainer:
             val_dataset,
             batch_size=self.config.batch_size,
             shuffle=False,
-            collate_fn=collate_fn,
+            collate_fn=cnn_collate_fn,
             num_workers=0,
         )
 
@@ -283,27 +260,29 @@ class ProteinTemperatureTrainer:
             test_dataset,
             batch_size=self.config.batch_size,
             shuffle=False,
-            collate_fn=collate_fn,
+            collate_fn=cnn_collate_fn,
             num_workers=0,
         )
 
         return train_loader, val_loader, test_loader
 
     def setup_model(self):
-        """Setup model, optimizer, scheduler, and loss function."""
-        if self.encoder is None:
-            raise ValueError("Encoder not initialized. Call load_data first.")
+        """Setup CNN model, optimizer, scheduler, and loss function."""
+        # Create model using factory
+        model_config = {
+            "embedding_dim": self.config.embedding_dim,
+            "grid_size": self.config.grid_size,
+            "cnn_channels": self.config.cnn_channels,
+            "kernel_size": self.config.kernel_size,
+            "dropout": self.config.dropout,
+            "max_sequence_length": self.config.max_sequence_length,
+        }
 
-        # Create model
-        self.model = ProteinTemperatureLSTM(
-            vocab_size=self.encoder.vocab_size,
-            lstm_hidden_size=self.config.lstm_hidden_size,
-            lstm_num_layers=self.config.lstm_num_layers,
-            fc_hidden_size=self.config.fc_hidden_size,
-            fc_num_layers=self.config.fc_num_layers,
-            dropout=self.config.dropout,
-            bidirectional=self.config.bidirectional,
-            device=self.device,
+        if self.config.model_type == "cnn_advanced":
+            model_config.update({"use_residual": True, "use_attention": True})
+
+        self.model = ModelFactory.create_model(
+            self.config.model_type, model_config, self.device
         )
 
         self.logger.info(f"Model info: {self.model.get_model_info()}")
@@ -321,8 +300,6 @@ class ProteinTemperatureTrainer:
                 lr=self.config.learning_rate,
                 weight_decay=self.config.weight_decay,
             )
-        else:
-            raise ValueError(f"Unknown optimizer: {self.config.optimizer_type}")
 
         # Setup scheduler
         if self.config.scheduler_type == "reduce_on_plateau":
@@ -352,14 +329,12 @@ class ProteinTemperatureTrainer:
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {self.current_epoch}")
 
-        for batch_idx, (sequences, temperatures, lengths) in enumerate(progress_bar):
-            sequences = sequences.to(self.device)
+        for batch_idx, (sequences, temperatures) in enumerate(progress_bar):
             temperatures = temperatures.to(self.device)
-            lengths = lengths.to(self.device)
 
             # Forward pass
             self.optimizer.zero_grad()
-            predictions = self.model(sequences, lengths)
+            predictions = self.model(sequences)
             loss = self.criterion(predictions, temperatures)
 
             # Backward pass
@@ -402,12 +377,10 @@ class ProteinTemperatureTrainer:
         num_batches = 0
 
         with torch.no_grad():
-            for sequences, temperatures, lengths in val_loader:
-                sequences = sequences.to(self.device)
+            for sequences, temperatures in val_loader:
                 temperatures = temperatures.to(self.device)
-                lengths = lengths.to(self.device)
 
-                predictions = self.model(sequences, lengths)
+                predictions = self.model(sequences)
                 loss = self.criterion(predictions, temperatures)
                 mae = torch.mean(torch.abs(predictions.squeeze() - temperatures))
 
@@ -421,17 +394,8 @@ class ProteinTemperatureTrainer:
         return avg_loss, avg_mae
 
     def train(self, train_loader: DataLoader, val_loader: DataLoader) -> Dict[str, Any]:
-        """
-        Main training loop.
-
-        Args:
-            train_loader: Training data loader
-            val_loader: Validation data loader
-
-        Returns:
-            Training history and final metrics
-        """
-        self.logger.info("Starting training...")
+        """Main training loop for CNN model."""
+        self.logger.info("Starting CNN training...")
         start_time = time.time()
 
         for epoch in range(self.config.num_epochs):
@@ -474,17 +438,18 @@ class ProteinTemperatureTrainer:
                     self.early_stopping_counter = 0
 
                     if self.config.save_best_model:
-                        best_model_path = self.output_dir / "best_model.pth"
-                        save_model(
+                        best_model_path = self.output_dir / "best_cnn_model.pth"
+                        ModelFactory.save_model(
                             self.model,
                             best_model_path,
                             self.optimizer,
                             epoch,
                             val_loss,
-                            {"val_mae": val_mae},
+                            {"val_mae": val_mae, "val_loss": val_loss},
+                            self.config.model_type,
                         )
                         self.logger.info(
-                            f"Saved best model with val_loss={val_loss:.4f}"
+                            f"Saved best CNN model with val_loss={val_loss:.4f}"
                         )
                 else:
                     self.early_stopping_counter += 1
@@ -500,26 +465,39 @@ class ProteinTemperatureTrainer:
                 and epoch % self.config.checkpoint_frequency == 0
             ):
                 checkpoint_path = (
-                    self.output_dir / f"checkpoint_epoch_{self.current_epoch}.pth"
+                    self.output_dir / f"cnn_checkpoint_epoch_{self.current_epoch}.pth"
                 )
-                save_model(
-                    self.model, checkpoint_path, self.optimizer, epoch, train_loss
+                ModelFactory.save_model(
+                    self.model,
+                    checkpoint_path,
+                    self.optimizer,
+                    epoch,
+                    train_loss,
+                    model_type=self.config.model_type,
                 )
 
         training_time = time.time() - start_time
-        self.logger.info(f"Training completed in {training_time:.2f} seconds")
+        self.logger.info(f"CNN training completed in {training_time:.2f} seconds")
 
         # Save final model
-        final_model_path = self.output_dir / "final_model.pth"
-        save_model(self.model, final_model_path, self.optimizer, self.current_epoch)
+        final_model_path = self.output_dir / "final_cnn_model.pth"
+        ModelFactory.save_model(
+            self.model,
+            final_model_path,
+            self.optimizer,
+            self.current_epoch,
+            model_type=self.config.model_type,
+        )
 
         # Save training history
-        history_path = self.output_dir / "training_history.json"
+        import json
+
+        history_path = self.output_dir / "cnn_training_history.json"
         with open(history_path, "w") as f:
             json.dump(self.training_history, f, indent=2)
 
         # Save config
-        config_path = self.output_dir / "config.json"
+        config_path = self.output_dir / "cnn_config.json"
         with open(config_path, "w") as f:
             json.dump(self.config.__dict__, f, indent=2)
 
@@ -531,22 +509,22 @@ class ProteinTemperatureTrainer:
         }
 
 
-def create_trainer(
-    config_dict: Optional[Dict[str, Any]] = None, output_dir: str = "models"
-) -> ProteinTemperatureTrainer:
+def create_cnn_trainer(
+    config_dict: Optional[Dict[str, Any]] = None, output_dir: str = "cnn_models"
+) -> CNNProteinTemperatureTrainer:
     """
-    Factory function to create a trainer.
+    Factory function to create a CNN trainer.
 
     Args:
         config_dict: Configuration dictionary
         output_dir: Output directory for models
 
     Returns:
-        Initialized trainer
+        Initialized CNN trainer
     """
     if config_dict:
-        config = TrainingConfig(**config_dict)
+        config = CNNTrainingConfig(**config_dict)
     else:
-        config = TrainingConfig()
+        config = CNNTrainingConfig()
 
-    return ProteinTemperatureTrainer(config, output_dir)
+    return CNNProteinTemperatureTrainer(config, output_dir)
