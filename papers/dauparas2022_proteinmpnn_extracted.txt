@@ -1,0 +1,133 @@
+ProteinMPNN: Robust deep learning–based protein sequence design using message passing neural networks
+
+Authors: J. Dauparas, I. Anishchenko, N. Bennett, H. Bai, R. J. Ragotte, L. F. Milles, B. I. M. Wicky, A. Courbet, R. J. de Haas, N. Bethel, P. J. Y. Leung, T. F. Huddy, S. Pellock, D. Tischer, F. Chan, B. Koepnick, H. Nguyen, A. Kang, B. Sankaran, A. K. Bera, N. P. King, D. Baker
+
+Published: Science 378, 49–56 (2022)
+
+ABSTRACT
+
+Deep learning has revolutionized protein structure prediction, but almost all experimentally characterized de novo protein designs have been generated using physically based approaches such as Rosetta. ProteinMPNN is a deep learning-based protein sequence design method with outstanding performance in both in silico and experimental tests. On native protein backbones, ProteinMPNN achieves 52.4% sequence recovery compared with 32.9% for Rosetta, while requiring only a fraction of the compute time (1.2 vs 258.8 seconds for 100 residues).
+
+KEY ARCHITECTURE FEATURES
+
+Message Passing Neural Network (MPNN):
+- 3 encoder layers and 3 decoder layers
+- 128 hidden dimensions
+- Processes protein backbone features as input
+- Predicts sequences autoregressively from N to C terminus
+
+Input Features:
+- Distances between N, Cα, C, O atoms
+- Virtual Cβ atom positions (calculated from backbone atoms)
+- Interatomic distances (better than dihedral angles or frame orientations)
+- 32-48 nearest Cα neighbor connections (performance saturated beyond this)
+
+Key Innovations:
+1. **Geometric Feature Encoding**: Uses N, Cα, C, O, and virtual Cβ distances
+2. **Edge Updates**: Both node and edge updates in backbone encoder
+3. **Order-Agnostic Decoding**: Random decoding order instead of fixed N→C
+4. **Multichain Support**: Handles monomers, oligomers, and protein complexes
+5. **Positional Coupling**: Residues can be tied within/between chains
+
+PERFORMANCE RESULTS
+
+Sequence Recovery Rates:
+- Monomers: 52% median recovery
+- Homomers: 55% median recovery  
+- Heteromers: 51% median recovery
+- Interface residues: 51-53% recovery
+
+Recovery by Burial:
+- Deep core: 90-95% recovery
+- Surface: ~35% recovery
+- Performance correlates with local geometric context
+
+Computational Efficiency:
+- ProteinMPNN: 1.2 seconds per 100 residues
+- Rosetta: 258.8 seconds per 100 residues
+- >200x speedup with better accuracy
+
+TRAINING METHODOLOGY
+
+Dataset:
+- 19,700 high-resolution single-chain PDB structures
+- Split: 80% train, 10% validation, 10% test
+- Based on CATH protein classification
+- Resolution better than 3.5Å, <10,000 residues
+
+Training Improvements:
+1. **Backbone Noise**: Adding Gaussian noise (σ=0.02Å) during training
+   - Improves performance on AlphaFold models
+   - Reduces overfitting to crystallographic artifacts
+   - Better generalization to predicted structures
+
+2. **Geometric Features**: Distance-based features outperform:
+   - Baseline model: 41.2% recovery
+   - + Distance features: 49.0% recovery
+   - + Edge updates: 50.5% recovery
+   - + Random decoding: 50.8% recovery
+
+ARCHITECTURAL DETAILS FOR IMPLEMENTATION
+
+Encoder Network:
+- Processes backbone coordinates (N, Cα, C, O positions)
+- Calculates virtual Cβ positions from backbone geometry
+- Computes pairwise distances between all atom types
+- Message passing with node and edge updates (3 layers)
+- 128-dimensional hidden representations
+
+Decoder Network:
+- Autoregressive sequence generation
+- Random decoding order (not fixed N→C)
+- Uses encoded backbone features + partial sequence context
+- Outputs amino acid probabilities at each position
+- 3 decoder layers with 128 hidden dimensions
+
+Graph Construction:
+- Nodes: Individual residue positions
+- Edges: Connect 32-48 nearest Cα neighbors
+- Features: Interatomic distances (N-N, Cα-Cα, C-C, O-O, Cβ-Cβ, cross-atom distances)
+- Relative positional encoding (±32 residues for multichain)
+
+APPLICATIONS FOR TEMPERATURE PREDICTION
+
+Potential Adaptations for Our Use Case:
+1. **Structural Encoding**: Use ProteinMPNN's distance-based encoding for temperature prediction
+2. **Graph Neural Network**: Adapt MPNN architecture for regression instead of sequence design
+3. **Geometric Features**: Incorporate N, Cα, C, O, Cβ distance matrices
+4. **Local Context**: Use 32-48 neighbor connectivity for local structure encoding
+5. **Multichain Support**: Handle protein complexes and oligomers
+
+Key Insights for Implementation:
+- Distance-based features are superior to dihedral angles
+- Local geometric context (32-48 neighbors) is sufficient
+- Edge updates improve performance significantly
+- Backbone noise during training improves generalization
+- Message passing captures residue-residue interactions effectively
+
+COMPARISON WITH CURRENT APPROACHES
+
+ProteinMPNN vs Our Current Methods:
+- **Input**: 3D coordinates vs 1D sequences
+- **Architecture**: Graph neural network vs LSTM/CNN
+- **Features**: Geometric distances vs sequence embeddings
+- **Context**: Local 3D environment vs sequential/positional
+- **Performance**: Proven on design tasks vs temperature prediction
+
+Potential Advantages for Temperature Prediction:
+1. **3D Structure Awareness**: Captures folding stability directly
+2. **Local Environment**: Models residue interactions in 3D space  
+3. **Geometric Inductive Bias**: Better for thermostability prediction
+4. **Proven Architecture**: Validated on related protein property tasks
+5. **Computational Efficiency**: Fast inference for large datasets
+
+IMPLEMENTATION STRATEGY
+
+For Temperature Prediction Adaptation:
+1. Replace sequence decoder with temperature regression head
+2. Use ProteinMPNN encoder for structural feature extraction
+3. Adapt for sequence-only input (predict 3D coordinates first)
+4. Or use with AlphaFold/ColabFold predicted structures
+5. Train on TemStaPro dataset with structural annotations
+
+This represents a significant architectural shift from sequence-based to structure-based temperature prediction, potentially offering much better performance by capturing the physical basis of thermostability.

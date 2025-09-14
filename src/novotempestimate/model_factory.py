@@ -10,8 +10,9 @@ import torch
 import torch.nn as nn
 from enum import Enum
 
-from .model import ProteinTemperatureLSTM, TemperatureLoss
+from .model import ProteinTemperatureLSTM
 from .cnn_model import ProteinTemperatureCNN, ProteinTemperatureCNNAdvanced
+from .mpnn_model import ProteinTemperatureMPNN, SequenceToStructureMPNN, MPNNModelConfig
 from .positional_encoder import ProteinPositionalEncoder
 from .peptide_encoder import PeptideEncoder
 
@@ -22,6 +23,8 @@ class ModelType(Enum):
     LSTM = "lstm"
     CNN_BASIC = "cnn_basic"
     CNN_ADVANCED = "cnn_advanced"
+    MPNN = "mpnn"
+    MPNN_SEQ2STRUCT = "mpnn_seq2struct"
 
 
 class ModelFactory:
@@ -56,6 +59,10 @@ class ModelFactory:
             return ModelFactory._create_cnn_basic_model(model_config, device)
         elif model_type == ModelType.CNN_ADVANCED:
             return ModelFactory._create_cnn_advanced_model(model_config, device)
+        elif model_type == ModelType.MPNN:
+            return ModelFactory._create_mpnn_model(model_config, device)
+        elif model_type == ModelType.MPNN_SEQ2STRUCT:
+            return ModelFactory._create_mpnn_seq2struct_model(model_config, device)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 
@@ -125,6 +132,48 @@ class ModelFactory:
         default_config.update(config)
 
         return ProteinTemperatureCNNAdvanced(device=device, **default_config)
+
+    @staticmethod
+    def _create_mpnn_model(
+        config: Dict[str, Any], device: str
+    ) -> ProteinTemperatureMPNN:
+        """Create MPNN model."""
+        # Default MPNN configuration
+        default_config = {
+            "mpnn_hidden_dim": 128,
+            "mpnn_num_layers": 3,
+            "mpnn_num_neighbors": 32,
+            "regression_hidden_dims": [256, 128, 64],
+            "loss_type": "mse",
+        }
+
+        # Update with provided config
+        default_config.update(config)
+
+        mpnn_config = MPNNModelConfig(**default_config)
+        return ProteinTemperatureMPNN(mpnn_config, device)
+
+    @staticmethod
+    def _create_mpnn_seq2struct_model(
+        config: Dict[str, Any], device: str
+    ) -> SequenceToStructureMPNN:
+        """Create sequence-to-structure MPNN model."""
+        # Default configuration
+        default_config = {
+            "mpnn_hidden_dim": 128,
+            "mpnn_num_layers": 3,
+            "mpnn_num_neighbors": 32,
+            "regression_hidden_dims": [256, 128, 64],
+            "loss_type": "mse",
+            "vocab_size": 21,
+        }
+
+        # Update with provided config
+        default_config.update(config)
+
+        vocab_size = default_config.pop("vocab_size")
+        mpnn_config = MPNNModelConfig(**default_config)
+        return SequenceToStructureMPNN(mpnn_config, vocab_size, device)
 
     @staticmethod
     def get_model_configs() -> Dict[str, Dict[str, Any]]:

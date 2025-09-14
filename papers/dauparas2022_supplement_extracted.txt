@@ -1,0 +1,732 @@
+Supplementary Materials for
+Robust deep learning–based protein sequence design using ProteinMPNN
+J. Dauparas et al.
+Corresponding author: D. Baker, dabaker@uw.edu
+Science 378, 49 (2022)
+DOI: 10.1126/science.add2187
+
+The PDF file includes:
+Materials and Methods
+Figs. S1 to S12
+Table S1
+References
+
+Materials and Methods
+Methods for training single chain models
+Training data
+For single chain experiments presented in Table 1 we used a set of 19.7k high resolution
+single-chain structures from the PDB were split into train, validation and test sets (80/10/10)
+based on the CATH4.2 40% non-redundant set of proteins (1, 8). We trained models
+following the setup described in (1), i.e. using the learning rate schedule and initialization of
+the original Transformer paper (22), a dropout rate of 10% (23), a label smoothing rate of
+10% (24), batch size with 6000 tokens, graph sparsity was set to be 30 nearest neighbors
+using Cα-Cα distances.
+Architecture modifications
+For experiment 1 we added extra input edge features, namely 16 Gaussian radial basis
+functions (RBFs) equally spaced from 0 Å to 20 Å for distances between N, Cα, C, O, and
+virtual Cβ for i and j residues. This resulted in 25*16=400 edge features. The virtual Cβ
+coordinates were calculated using ideal angle and bond length definitions: b = Cα - N, c = C
+- Cα, a = cross(b, c), Cβ = -0.58273431*a + 0.56802827*b - 0.54067466*c + Cα.
+For experiment 2 we introduced edge updates for the encoder network. The inputs to the
+encoder are node (denoted Vi) and edge (denoted Eij) features for i and j residues. A
+message Mij is constructed using a multilayer perceptron (MLP) applied to [Vi, Vj, Eij]
+concatenated tensors. These messages are summed over neighbors, j, and an additional
+MLP is applied to get a new updated nodes Vinew. These new nodes are used to get new
+edges, Eijnew=MLP[Vinew, Vjnew, Eij]. We used layer normalization, dropout, and residual
+connections for all layers, hnew = LayerNorm[hold + Dropout(dh)], where dh is an output from
+the layer, hold is the old value, hnew is the updated new value.
+For experiment 4 we implemented a random decoding order when training. To achieve this
+we constructed a random permutation matrix on-the-fly for every input example and applied
+it to rows and columns of the upper triangular matrix which is an autoregressive mask for the
+left to right decoding. Alternatively, one could permute input tokens and keep the
+
+2
+
+autoregressive mask fixed given that the neural network architecture is permutation
+equivariant which is the case for most graph neural networks.
+Methods for training multichain models
+Training data
+We trained ProteinMPNN on protein assemblies in the PDB (as of Aug 02, 2021) determined
+by X-ray crystallography or cryoEM to better than 3.5 Å resolution and with less than 10,000
+residues. Sequences were clustered at 30% sequence identity cutoff using mmseqs2 (25)
+resulting in 25,361 clusters. We split those clusters randomly into three groups for training
+(23,358), validation (1,464), and testing (1,539), ensuring that none of the chains from the
+target chain or chains from the biounits of the target chain would be in the other two groups.
+Every training epoch, we cycled through the sequence clusters and picked a random
+sequence member from each cluster, and for each such ‘query' we randomly picked a
+protein conformation (in cases where there were multiple) and reconstructed the biological
+assembly for the corresponding PDB entry; for cases with multiple biological assemblies, we
+picked one assembly at random. For hetero-oligomeric assemblies, we masked out the
+sequence from the query chain but provided the network with the sequence information on
+all other chains in the assembly, while for homo-oligomers, sequences were masked out
+from all copies to prevent potential information leakage (two protein chains were considered
+as homo-oligomeric if the sequence identity between residues aligned by TM-align (26) was
+higher than 70%.
+Loss function and optimization
+We used negative log likelihood with a label smoothing rate of 10% (24) for the loss (not
+using label smoothing works well too). The sum of negative probabilities worked much better
+than the average of log probabilities. The training loss was defined by lossaverage = sum(loss *
+mask) / 2000 where 2000 was chosen empirically, loss (categorical cross entropy per token)
+and mask had shapes [batch, protein length]. For optimization we used Adam with beta1 =
+0.9, beta2 = 0.98, epsilon= 10−9, and the learning rate schedule described in (22). Models
+were trained using pytorch (27), batch size of 10k tokens, automatic mixed precision, and
+gradient checkpointing on a single NVIDIA A100 GPU. Training and validation losses
+(perplexities) as functions of optimizer steps are shown in Figure S3D. Validation loss
+converged after about 150k optimizer steps which is about 100 epochs of on-the-fly sampled
+training data from 23,358 PDB clusters.
+3
+
+Input features
+ProteinMPNN input features were just embedded edges without any node features (Figure
+1A). Using protein dihedral angles as node input features did not result in better performance
+so for simplicity in dealing with multichain backbones we did not use any node input
+features. The edge features consisted of distances between residues in Euclidean space
+and distances between residues in the primary sequence space (relative positional
+encoding) within a chain plus an indicator if residues are in different chains. We encoded
+distances between N, Cα, C, O, and virtual Cβ (see Methods for training single chain models
+for the definition of Cβ) for i and j residues using 16 RBFs equally spaced from 2Å to 22Å.
+For relative positional encoding we used AlphaFold-like (10) discrete (one-hot encoded)
+tokens -32, -31,..., 31, 32 within the protein chains and additional token 33 if residues are in
+different chains. Ablating positional encodings showed almost the same performance
+suggesting that relative primary sequence or inter-chain information is already present in the
+Euclidean distances between atoms, e.g. distances between neighboring Cα atoms are the
+same for all residues.
+Model architecture
+We used encoder-decoder message passing neural networks for this task (1, 22, 28), see
+Figure 1. The encoder takes graph nodes and edges as inputs and using 3 layers with
+hidden dimension of 128 (larger hidden dimensions mainly decrease training loss with only
+marginal gains to the validation loss) updates those nodes and edges using message
+passing with edge updates.
+Pseudocode for the encoder layer (V - node features, E - edge features):
+def encoder_layer_forward(V, E):
+M_ij = MLP[V_i, V_j, E_ij]
+dV_i = Sum_j [M_ij]
+V_i = LayerNorm[V_i + Dropout(dV_i)]
+dV_i = FeedForward[V_i]
+V_i = LayerNorm[V_i + Dropout(dV_i)]
+dE_ij = MLP[V_i, V_j, E_ij]
+E_ij = LayerNorm[E_ij + Dropout(dE_ij)]
+return V, E
+
+4
+
+The decoder takes in node and edge features from the encoder plus encoded protein
+sequence to which an autoregressive mask is applied. The decoder layer is a vanilla MPNN
+layer with 3 layers and 128 hidden dimensions.
+Pseudocode for the decoder layer (V - node features, E - edge features, S - sequence
+features, mask - autoregressive mask):
+def decoder_layer_forward(V, E, S, mask):
+E_ij = Concat[E_ij, S_j] * mask_ij + Concat[E_ij, 0.0*S_j] * (1-mask_ij)
+M_ij = MLP[V_i, V_j, E_ij]
+dV_i = Sum_j [M_ij]
+V_i = LayerNorm[V_i + Dropout(dV_i)]
+dV_i = FeedForward[V_i]
+V_i = LayerNorm[V_i + Dropout(dV_i)]
+return V
+For both encoder and decoder the multi-layer perceptrons (MLPs) had 3 linear layers of the
+model’s hidden dimension and GELU activation functions (GELU worked slightly better
+compared with ReLU). The FeedForward layers had 2 linear layers with GELU activations
+and with the middle hidden dimension 4 times bigger than the input dimension as in the
+Transformer paper (22).
+Further in silico analysis
+Comparing with Rosetta fixed backbone design
+For a test set of 402 monomer backbones we found that ProteinMPNN had a much higher
+overall native sequence recovery (52.4% vs 32.9%), with improvements across the full range
+of residue burial from protein core to surface (Figure 2A). We also found the sequence
+recoveries are correlated between Rosetta and ProteinMPNN designs (Figure S12) likely
+due to the fact that some backbones have more geometric context that can be used to
+predict correct amino acids.
+Amino acid compositional bias
+Figure S2 shows ProteinMPNN and Rosetta amino acid compositional bias compared with
+the native PDB sequences. ProteinMPNN sequences were designed using temperature
+5
+
+T=0.1. Rosetta designed sequences have an overrepresentation of alanines in the core and
+boundary. Both models favor a negatively charged glutamic acid, E, on the surface and
+disfavor a polar amino acid glutamine, Q. Interestingly, ProteinMPNN and Rosetta biases
+strongly disagree for lysine, K on the surface. Amino acid bias for ProteinMPNN is a function
+of the sampling temperature (see Figure S6) with low temperatures introducing more
+charged amino acids on the surface.
+AlphaFold benchmarks
+We ran all 5 AlphaFold ptm models with 3 recycles and selected the model with the highest
+average pLDDT as described in the AlphaFold paper (9) using only a single sequence as an
+input. For results described in Figure 2C and Figures S7, S8, S9, we generated 8 sequences
+per target backbone for 396 monomers (with maximum length of 300 residues) from the test
+set and used AlphaFold to predict structures for these sequences. Dependence on the
+inference noise level and sampling temperature for sequence recovery and relative
+AlphaFold success rate for the MPNN model trained with 0.2Å are shown in Figure S7A, B.
+Both of these metrics decrease with higher levels of noise and temperature. We also
+generated 8 sequences per target backbone for 277 homomers (with maximum length of
+400 residues) and plotted sequence recovery and inter-chain predicted aligned error (PAE)
+as a function of the MPNN training noise level, Figure S7C. The trend is very much the same
+as for the monomer case showing that sequences from slightly noised MPNN models are
+more easily decoded by AlphaFold. It is important to notice that AlphaFold success rate for
+the single sequence prediction depends on the number of recycles used during the
+inference. We benchmarked 1, 2, 3, 6, and 12 recycles for the MPNN monomer sequences,
+see Figure S7D. The success rate monotonically increases suggesting that more powerful
+single sequence structure prediction models might have even higher success rates, i.e.
+MPNN sequences are correctly encoding structures, but it is hard to predict those structures
+using only single sequence information. Finally, we looked at the dependence between
+AlphaFold pLDDT and true lDDT-Cα, i.e. between native target backbone for MPNN and
+predicted AlphaFold backbone, Figure S8. The correlation is very much like in the original
+AlphaFold paper (10) in this single sequence regime with slight underestimation of lDDT-Cα.
+Cα-only ProteinMPNN
+We trained ProteinMPNN which used Cα coordinates only as an input instead of full
+backbone coordinates to have a way to generate sequences for coarse, or approximately
+correct backbones. In the similar way as for the full atom ProteinMPNN adding inter-atom
+6
+
+distances as edge features helped to improve model’s performance. We added distances
+between triplets of Cα atoms: Cαi-1, Cαi, Cαi and Cαj-1, Cαj, Cαj for residues i and j encoded
+as 16 Gaussian radial basis functions. The rest of the architecture is the same as for the full
+atom version. Sequence recovery and relative AlphaFold success rate as a function of
+training noise level are shown in Figure S9.
+
+Effects of training with Gaussian noise
+We explored training sequence design models with additive Gaussian noise and found that
+even very small amounts of noise (std=0.02 Å) decreased sequence recovery by almost 5%
+(Figure 2C) suggesting that the model is able to pick up on crystallographic artefacts to
+guess the correct amino acid identity. Adding higher levels of noise further decreases
+sequence recovery, but interestingly increases AlphaFold success rate (Figure 2C). We
+looked into sequence similarity to the consensus sequence generated by collecting multiple
+sequence alignments for the native sequences. We found that a sequence similarly to the
+consensus sequence is less sensitive to the training noise level compared with the sequence
+similarity to the native backbone sequence (Figure S10A). Furthermore, we generated 128
+sequences per target (sampling temperature 0.1) using ProteinMPNN and calculated
+empirical probabilities for amino acids at every position (also known as 1D statistics, or
+PSSM). We measured similarity between multiple sequence alignment PSSM and
+ProteinMPNN empirical PSSM using Jensen-Shannon divergence and found that sequences
+generated with the model which was trained with std=0.30 Å noise had the closest match
+(Figure S10B) suggesting that ProteinMPNN models trained with some noise were sampling
+more family like sequences. Users of ProteinMPNN can choose which models to use
+depending on the quality of their input backbones.
+
+Effects of sampling temperature
+To model probabilities of amino acids given protein backbone coordinates we fit categorical
+20
+
+distributions defined by 𝑝(𝐴𝐴|𝑠𝑡𝑟𝑢𝑐𝑡𝑢𝑟𝑒) = 𝑒𝑥𝑝(𝑙𝑜𝑔𝑖𝑡𝑠/𝑇)/ ∑ 𝑒𝑥𝑝(𝑙𝑜𝑔𝑖𝑡𝑠𝑖/𝑇) where 𝑙𝑜𝑔𝑖𝑡𝑠
+𝑖=1
+
+are the outputs of the model (unnormalized probability) and 𝑇 is the sampling temperature
+which is a hyperparameter which can be chosen at inference time. Low temperature would
+lead to very sharp distributions whereas very high temperature would lead to uniform
+distribution. During training the temperature is set to one. This means that sequence
+7
+
+recovery and generated sequence diversity will depend on the sampling temperature.
+Sequence recovery decreases, but sequence diversity increases with higher temperatures
+(Figure 2D). Same as for the sequence recovery (Figure 2A), the sequence diversity for
+specific amino acids very much depends on the average distances of the neighboring
+residue Cβs (Figure S11B) - more conservation in the core and more diversity on the
+surface. For a chosen example (PDB ID: 1QLG) we generated 32 sequence samples at
+temperatures T=0.1; T=0.3 and plotted sequence similarity across all sequences (Figure
+S11C, D). Average sequence recovery at T=0.1 and T=0.3 was 56.9% and 56.4%
+accordingly. At the expense of the small sequence recovery decrease samples generated at
+higher temperature have more diversity.
+Experimental methods
+HALC1_878 (PDB ID: 8CYK) (Figure 1D) was expressed in TBM-5052 medium with 50
+μg/mL Kanamycin for 24 hours at 37°C with shaking at 225 rpm using the autoinduction
+method before harvesting via centrifugation at 4000xg for 5 minutes. Cells were lysed in
+30ml of wash buffer (20 mM Tris, 300 mM NaCl, 25 mM Imidazole, pH 8.0) with sonication at
+4°C. Lysates were then centrifuged for 45 minutes at 14000xg and applied to Ni-NTA resin
+that was pre-equilibrated with wash buffer. The resin was washed with 30 column volumes of
+wash buffer. 6xhis affinity tags were removed via on-bead SNAC (29) cleavage. Resin was
+washed with 20CV of cleavage buffer (100 mM CHES, 100 mM Acetone oxime, 100 mM
+NaCl, pH 8.6) prior to incubation with 20ml cleavage buffer and 2mM NiCl₂ overnight at room
+temperature. Flow through was collected and concentrated to 1ml using 3K protein
+concentrators (Millipore Sigma) before size exclusion chromatography using an S75 10/300
+GL increase column (GE Healthcare).
+HALC1_878 (PDB ID: 8CYK) was crystallized through sitting drop vapour diffusion at room
+temperature in 0.1M citric acid pH 3.5 and 3M sodium chloride. Prior to harvesting and flash
+freezing in liquid nitrogen, crystals were transferred to the crystallization condition with 25%
+ethylene glycol. Diffraction data was collected at 100K at the Advanced Light Source
+beamline 8.2.1. Images were integrated using XDS 20220110 (30), with Aimless (31) used
+for scaling and merging. The design model was used as the search model for molecular
+replacement with Phaser 2.8. (32) Model building and refinement was done using Coot 0.9.8
+(33), and Phenix refine from Phenix 1.20. (34) All structures were validated using MolProbity
+4.5.1. (35) Crystallographic statistics are available in Table S1. Crystallographic data has
+been deposited to the protein bank with the PDB ID: 8CYK.
+
+8
+
+Protein sequences, expression and purification relating to the SH3 binder designs
+All genes were cloned into pET-29b+. The plasmids were transformed into BL21 (DE3) E.
+coli (NEB), and then expressed using autoinduction media (Studiers M2) with 200 ug/mL
+kanamycin. After overnight (~18 hours) shaking at 37°C, the cells were harvested and
+centrifuged at 4000g for 15 minutes. The cell pellets were resuspended in Tris Buffer Saline
+(25 mM Tris HCl pH 8, 150 mM NaCl, 10 mM imidazole, 50ug/mL DNase, 50ug/mL RNase,
+as well as protease inhibitor tablet from Thermo Scientific Pierce). The suspended cells were
+lysed by sonication, and then clarified by centrifuge at ~14,000g for 30 minutes. The
+supernatant was subjected to Ni-NTA resin (Qiagen), and washed by high-salt Tris buffer (25
+mM Tris HCl pH 8, 1000 mM NaCl, 25 mM imidazole), followed by regular Tris buffer (25 mM
+Tris HCl pH 8, 150 mM NaCl, 25 mM imidazole). The protein of interest was then eluted by
+elution buffer (25 mM Tris HCl pH 8, 150 mM NaCl, 400 mM imidazole). The protein was
+dialyzed in PBS (pH 7.4) to remove imidazole. For the purification of the biotinylated Grb2
+SH3 domain, a pBirA plasmid was co-transformed to the BL21 (DE3) E coli, and 10 mM
+biotin was added to the cell culture. The protein elute from the Ni-NTA resin was purified
+through FPLC with size exclusion column using PBS (pH 7.4).
+1) Native Gab2-peptide-sfGFP
+AIAPPPRPPKPSQ is the residue 348-360 of human Gab2, and in Red.
+The core SH3 binding motif is highlighted in Cyan. sfGFP is in Green.
+
+MGGSGGSGGAIAPPPRPPKPSQGGSGGSGGKGEELFTGVVPILVELDGDVNGHKFSV
+RGEGEGDATNGKLTLKFICTTGKLPVPWPTLVTTLTYGVQCFARYPDHMKQHDFFKS
+AMPEGYVQERTISFKDDGTYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEY
+NFNSHNVYITADKQKNGIKANFKIRHNVEDGSVQLADHYQQNTPIGDGPVLLPDNHY
+LSTQSVLSKDPNEKRDHMVLLEFVTAAGITHGMDELYKGSLEHHHHHH
+2) Old Rosetta Design of SH3 domain binder
+Design sequence is in Red. The core SH3 binding motif is highlighted in Cyan.
+sfGFP is in Green.
+
+MPKLDKIKEIVKKIKKLVESAASSGDKDKVVKVAWKALQALWEALIELLGGQLPPPR
+PPKPGTDNLDKVVKQLAEAVKKAADEAKKAYPSKKVDEVVKAIKDVVDVIQEAVKTG
+GSGGSKGEELFTGVVPILVELDGDVNGHKFSVRGEGEGDATNGKLTLKFICTTGKLP
+VPWPTLVTTLTYGVQCFARYPDHMKQHDFFKSAMPEGYVQERTISFKDDGTYKTRAE
+VKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNFNSHNVYITADKQKNGIKANFKIR
+HNVEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSVLSKDPNEKRDHMVLLEFVT
+AAGITHGMDELYKGSLEHHHHHH
+9
+
+3) The working ProteinMPNN design of SH3 domain binder
+Design sequence is in Red. The core SH3 binding motif is highlighted in Cyan.
+sfGFP is in Green. The key Asn residues are highlighted in Yellow.
+
+MELAKKAIKKVEEIKKKVEAAAATGDRERIREVAYEALQEIHELINELLGGKFPPPR
+PPKKGDEEKRRNVLENAERVKKYSEEVVKANPSEESKELVEAINKVVELVIEAVESG
+GSGGSKGEELFTGVVPILVELDGDVNGHKFSVRGEGEGDATNGKLTLKFICTTGKLP
+VPWPTLVTTLTYGVQCFARYPDHMKQHDFFKSAMPEGYVQERTISFKDDGTYKTRAE
+VKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNFNSHNVYITADKQKNGIKANFKIR
+HNVEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSVLSKDPNEKRDHMVLLEFVT
+AAGITHGMDELYKGSLEHHHHHH
+4) The D to N mutant of the working ProteinMPNN design of SH3 domain binder
+Design sequence is in Red. The core SH3 binding motif is highlighted in Cyan.
+sfGFP is in Green. The Asn to Asp mutations are highlighted in Yellow.
+
+MELAKKAIKKVEEIKKKVEAAAATGDRERIREVAYEALQEIHELIDELLGGKFPPPR
+PPKKGDEEKRRNVLEDAERVKKYSEEVVKANPSEESKELVEAINKVVELVIEAVESG
+GSGGSKGEELFTGVVPILVELDGDVNGHKFSVRGEGEGDATNGKLTLKFICTTGKLP
+VPWPTLVTTLTYGVQCFARYPDHMKQHDFFKSAMPEGYVQERTISFKDDGTYKTRAE
+VKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNFNSHNVYITADKQKNGIKANFKIR
+HNVEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSVLSKDPNEKRDHMVLLEFVT
+AAGITHGMDELYKGSLEHHHHHH
+5) Human Grb2 C-terminal SH3 with AviTag
+The C-terminal SH3 of Grb2 sequence in Red
+The AviTag is in Green.
+
+MGGSGGPTYVQALFDFDPQEDGELGFRRGDFIHVMDNSDPNWWKGACHGQTGMFPRN
+YVTAVNGGSGGLNDIFEAQKIEWHEGGSGGHHHHHH
+Biolayer Interferometry for SH3 binder designs
+Octet RED96 (Sartorius, formerly ForteBio) was used for checking the SH3 domain binding
+abilities. The biotinylated human Grb2 C-terminal SH3 was loaded to Octet SA Biosensors
+(streptavidin-coated biosensors) at 50 nM concentration in Octet buffer (10 mM HEPES pH
+7.4, 150 mM NaCl, 3 mM EDTA, 0.05% surfactant P20, 1% BSA). The proteins of interest
+
+10
+
+were diluted to planned concentration series using Octet Buffer. The binding curves
+(association steps) were recorded after dipping the biosensors into the wells containing
+proteins of interest with desired concentrations. The dissociation steps started when dipping
+the biosensors into Octet Buffer.
+Some details of using AlphaFold to judge ProteinMPNN designed SH3 binders
+From the old Rosetta designed scaffold, we used proteinMPNN to generate 16 sequences.
+Then we use Alphafold2 to generate 5 predicted models for each of the sequences. The
+average pLDDT values of the 80 AlphaFold2 predictions have a mean of 85.45, with a
+maximum of 90.60 and a minimum of 74.43.
+In comparison, if we use AlphaFold2 to predict the original designed sequence (before
+proteinMPNN refinement), the resulting 5 models' average pLDDT values are 82.93, 80.84,
+74.65, 82.08, 83.98.
+Below are top 5 models with the highest pLDDT values:
+ProteinMPNN sequence #5, model #3, with average pLDDT value: 90.60
+ProteinMPNN sequence #7, model #3, with average pLDDT value: 90.43
+ProteinMPNN sequence #7, model #1, with average pLDDT value: 89.83
+ProteinMPNN sequence #1, model #3, with average pLDDT value: 89.81
+ProteinMPNN sequence #7, model #2, with average pLDDT value: 89.71
+So for this scaffold, we chose and ordered 3 unique ProteinMPNN refined sequences (#5,
+#7, #1). #7 and #1 didn't show any binding using yeast display screening, while sequence #5
+showed decent binding, and we carried out Octet assays for #5 to further analyze its SH3
+binding ability.
+In brief, one original design -> 16 ProteinMPNN sequence -> 80 AlphaFold2 models -> order
+3 sequences with top average LDDT -> 1 works
+Unlike the above-mentioned original Rosetta design, which we carried out a decent amount
+of characterization, we also chose 4 old designed models, which were never experimentally
+characterized, and generated 64 ProteinMPNN designs. Again, by using AlphaFold2, we
+selected 8 sequences (1 old design + 7 ProteinMPNN design) with average LDDT from
+92.15 to 95.03. Unfortunately, none of these designs showed binding signals during yeast
+display screening, and we didn't carry out further characterization.
+
+11
+
+When these sequences were ordered, AlphaFold-Multimer had not been released. So the
+pLDDT values used for selecting sequences to order, only reflect the prediction confidence
+of the designed binders. That might be the reason that the pLDDT values we were using are
+not so discriminative. Developing metrics to select ProteinMPNN results for testing is very
+critical, and hopefully with more experimental data and improving in silico prediction tools,
+we can find more reliable metrics.
+
+Fig. S1. In silico validation results. (A) Sequence recovery as a function of the number of
+nearest neighbors in the graph. (B) Sequence recovery as a function of burial for monomers,
+homomers, and heteromers. (C) Comparing three different ways of generating sequences
+for homomers: unconstrained (treating as non-symmetric), averaging predicted probabilities,
+averaging predicted logits (unnormalized probabilities). (D) An example showing negative
+logits predicted by the model for chain A and chain B in the homodimer. The blue curve
+shows averaged logits which will be normalized to sample an amino acid.
+
+12
+
+Fig. S2. Difference in compositional bias for Rosetta and ProteinMPNN. (A) Bias for all
+residues in the monomer chain. (B) Bias for surface residues. (C) Bias for boundary
+residues. (D) Bias for core residues.
+
+13
+
+Fig. S3. Sequence recovery dependence on confidence and backbone quality. (A) We
+generated 32 sequences for every backbone in the test set of 690 PDB monomers using
+sampling temperatures 0.1, 0.3, 0.5 and ranked them using the log probability of the model
+(confidence). (B) Sequence recovery as a function of PDB resolution using 0.02 Å noised
+MPNN model for a set of 690 PDB monomers. The black line shows a least squares linear
+fit. Spearman's rank correlation was -0.487. (C) Sequence recovery as a function of
+AlphaFold model confidence (average pLDDT) for a set of 1621 UniRef50 models.
+Spearman's rank correlation was 0.489. (D) Training and validation perplexities as a function
+of optimizer steps for different levels of backbone noise. Backbone noise and dropout (0.1)
+was not applied during the validation.
+
+14
+
+Fig. S4. Size exclusion chromatography of ProteinMPNN designed two-component
+tetrahedron nanoparticles. 13/76 nanoparticle designs eluted at ~13 mL on a Superdex
+S200 10/300 Increase column, corresponding to nanoparticles of ~1 MDa. On the y-axis is
+normalized absorbance (uv 230), on the x-axis is retention volume [mL].
+
+Fig. S5. Designed backbone and crystal structure comparison. Target backbone
+HALC1_878 (PDB ID: 8CYK) from hallucination on the left, AlphaFold prediction using
+ProteinMPNN sequence in the middle, and crystal structure on the right (deposited to PDB
+as 8CYK). Backbone RMSDs are shown for every pair of backbones.
+
+15
+
+Fig. S6. ProteinMPNN bias for different sampling temperatures. (A) ProteinMPNN
+generates more charged amino acids in expense of the polar ones at low temperatures
+which likely leads to highly thermo-stable proteins. (B) Amino acid bias is very small at
+temperature T=1.0.
+
+Fig. S7. Sequence recovery and AlphaFold (AF) benchmarks for the ProteinMPNN
+trained with 0.2Å noise level. (A) Sequence recovery and AF success rate for monomeric
+structures with true LDDT>95.0, 90.0 as a function of noise applied to backbones during the
+inference, 1.0 corresponds to 3.3% absolute rate for 95.0 LDDT cutoff and to 16.0% for 90.0
+cutoff. (B) Same as A, but as a function of sequence sampling temperature, 1.0 corresponds
+to 3.3% absolute rate for 95.0 LDDT cutoff and to 16.5% for 90.0 cutoff. (C) Sequence
+recovery and AF success rate for homomers with inter-chain PAE<4.0, 6.0 as a function of
+training noise level, 1.0 corresponds to 2.4% for the 4.0 PAE cutoff, and to 5.6% for the 6.0
+cutoff. (D) AlphaFold success rate as a function of number of AlphaFold recycles for
+monomers.
+16
+
+Fig. S8. Comparing true lDDT-Cα with AlphaFold predicted pLDDT for MPNN sequence
+redesigns on native PDB backbone monomers using single sequence prediction.
+lDDT-Cα is calculated between the native backbone input to the MPNN and the AlphaFold
+output using MPNN sequence. (A) pLDDT and lDDT-Cα are highly correlated in this regime.
+(B) Zoomed in version of A showing that true lDDT-Cα is slightly underestimated by pLDDT.
+
+Fig. S9. Benchmarks of Cα-only ProteinMPNN model for monomers. (A) Sequence
+recovery as a function of training noise level for Cα-only and full backbone models. (B)
+Relative AlphaFold success rate as a function of training noise level for Cα-only and full
+backbone networks for the models with lDDT-Cα>90.0, 1.0 is equal to 6.7% success rate.
+
+17
+
+Fig. S10. Sequence comparison against consensus and PSSM distributions
+
+(A)
+
+Sequence similarity with respect to native and consensus sequences as a function of
+training noise level using sampling temperature of 0.1. Similarity to the consensus sequence
+is less sensitive to the training noise. (B) Sequence recovery and similarity to PSSM defined
+as one minus ​Jensen-Shannon divergence between PSSM distribution from multiple
+sequence alignment (up to 90% sequence identity cutoff)
+
+and empirical ProteinMPNN
+
+distribution for 128 generated sequences.
+
+18
+
+Fig. S11. Further analysis. (A) Comparing ProteinMPNN scores (average negative log
+likelihoods) for AlphaFold hallucinated and ProteinMPNN redesigned sequences for the
+same backbones. Colors indicate if expressed sequences were soluble from both methods,
+only from ProteinMPNN, only from AlphaFold, or none of them were soluble. (B) Sequence
+similarity from a sample of 32 sequences to each other as a function of residue burial for
+temperatures T=0.1, T=0.3, and T=0.5. Increasing sampling temperature mostly affects
+surface residues. (C, D) An example showing sequence similarities across 32 ProteinMPNN
+samples for a protein backbone of 1QLG at temperatures T=0.1; T=0.3.
+
+19
+
+Fig. S12. ProteinMPNN sequences recoveries. Scatter plot showing sequence recovery
+for Rosetta vs. ProteinMPNN for 402 monomer backbones. Average sequence recovery for
+ProteinMPNN was 52.4%, compared to 32.9% for Rosetta. There is a clear correlation
+between two methods.
+
+20
+
+HALC1_878 (PDB ID:
+8CYK)
+Data Collection
+Space group
+
+I121
+
+Cell dimensions
+a, b, c (Å)
+
+64.17, 55.45, 82.81
+
+α, β, γ (°)
+
+90.00, 94.00, 90.00
+
+Resolution (Å)
+
+48.98 - 1.65 (1.709 1.65)
+
+Rmerge (%)
+
+2.1 (19.4)
+
+Rpim (%)
+
+2.1 (19.4)
+
+/σ(I)
+
+15.91 (3.96)
+
+CC 1/2
+
+0.999 (0.942)
+
+Completeness (%)
+
+96.85 (95.70)
+
+Redundancy
+
+2.0 (2.0)
+
+Refinement
+No. unique reflections
+
+33946 (3322)
+
+Rwork / Rfree (%)
+
+18.5 (24.0) / 21.7
+(28.1)
+
+No. non-hydrogen atoms
+
+2366
+
+Macromolecules
+
+2151
+
+Water
+
+215
+
+Ramachandran
+favoured/allowed
+
+98.83/1.17
+
+R.m.s. deviations
+Bond lengths (Å)
+
+0.011
+
+Bond angles (°)
+
+1.12
+
+B-factors (Å2)
+Macromolecules
+
+28.36
+
+Solvent
+
+39.25
+
+Table S1. Crystallographic statistics for HALC1_878.
+
+21
+
+References and Notes
+1. J. Ingraham, V. K. Garg, R. Barzilay, T. Jaakkola, “Generative models for graph-based
+protein design” in Advances in Neural Information Processing Systems 32 (NeurIPS
+2019), H. Wallach, H. Larochelle, A. Beygelzimer, F. d’Alché-Buc, E. Fox, R.
+Garnett, Eds. (Neural Information Processing Systems Foundation, 2019), pp. 15741–
+15752.
+2. Y. Zhang, Y. Chen, C. Wang, C. C. Lo, X. Liu, W. Wu, J. Zhang, ProDCoNN: Protein
+design using a convolutional neural network. Proteins 88, 819–829 (2020).
+doi:10.1002/prot.25868 Medline
+3. Y. Qi, J. Z. H. Zhang, DenseCPD: Improving the accuracy of neural-network-based
+computational protein sequence design with DenseNet. J. Chem. Inf. Model. 60,
+1245–1252 (2020). doi:10.1021/acs.jcim.0c00043 Medline
+4. B. Jing, S. Eismann, P. Suriana, R. J. L. Townshend, R. Dror, “Learning from protein
+structure with geometric vector perceptrons,” paper presented at the International
+Conference on Learning Representations, Vienna, Austria, 4 May 2021.
+5. A. Strokach, D. Becerra, C. Corbi-Verge, A. Perez-Riba, P. M. Kim, Fast and flexible
+protein design using deep graph neural networks. Cell Syst. 11, 402–411.e4 (2020).
+doi:10.1016/j.cels.2020.08.016 Medline
+6. N. Anand, R. Eguchi, I. I. Mathews, C. P. Perez, A. Derry, R. B. Altman, P. S. Huang,
+Protein sequence design with a learned potential. Nat. Commun. 13, 746 (2022).
+doi:10.1038/s41467-022-28313-9 Medline
+7. C. Hsu, R. Verkuil, J. Liu, Z. Lin, B. Hie, T. Sercu, A. Lerer, A. Rives, Learning inverse
+folding from millions of predicted structures. bioRxiv 2022.04.10.487779 [Preprint]
+(2022); https://doi.org/10.1101/2022.04.10.487779.
+8. C. A. Orengo, A. D. Michie, S. Jones, D. T. Jones, M. B. Swindells, J. M. Thornton,
+CATH—A hierarchic classification of protein domain structures. Structure 5, 1093–
+1108 (1997). doi:10.1016/S0969-2126(97)00260-8 Medline
+9. B. Uria, I. Murray, H. Larochelle, “A deep and tractable density estimator” in Proceedings
+of the 31st International Conference on Machine Learning, E. P. Xing, T. Jebara, Eds.
+(JMLR, 2014), pp. 467–475.
+10. J. Jumper, R. Evans, A. Pritzel, T. Green, M. Figurnov, O. Ronneberger, K.
+Tunyasuvunakool, R. Bates, A. Žídek, A. Potapenko, A. Bridgland, C. Meyer, S. A.
+A. Kohl, A. J. Ballard, A. Cowie, B. Romera-Paredes, S. Nikolov, R. Jain, J. Adler, T.
+Back, S. Petersen, D. Reiman, E. Clancy, M. Zielinski, M. Steinegger, M. Pacholska,
+T. Berghammer, S. Bodenstein, D. Silver, O. Vinyals, A. W. Senior, K. Kavukcuoglu,
+P. Kohli, D. Hassabis, Highly accurate protein structure prediction with AlphaFold.
+Nature 596, 583–589 (2021). doi:10.1038/s41586-021-03819-2 Medline
+11. A. Leaver-Fay, M. J. O’Meara, M. Tyka, R. Jacak, Y. Song, E. H. Kellogg, J. Thompson,
+I. W. Davis, R. A. Pache, S. Lyskov, J. J. Gray, T. Kortemme, J. S. Richardson, J. J.
+Havranek, J. Snoeyink, D. Baker, B. Kuhlman, Scientific benchmarks for guiding
+macromolecular energy function improvement. Methods Enzymol. 523, 109–143
+(2013). doi:10.1016/B978-0-12-394292-0.00006-0 Medline
+12. J. K. Leman, B. D. Weitzner, S. M. Lewis, J. Adolf-Bryfogle, N. Alam, R. F. Alford, M.
+Aprahamian, D. Baker, K. A. Barlow, P. Barth, B. Basanta, B. J. Bender, K.
+
+Blacklock, J. Bonet, S. E. Boyken, P. Bradley, C. Bystroff, P. Conway, S. Cooper, B.
+E. Correia, B. Coventry, R. Das, R. M. De Jong, F. DiMaio, L. Dsilva, R. Dunbrack,
+A. S. Ford, B. Frenz, D. Y. Fu, C. Geniesse, L. Goldschmidt, R. Gowthaman, J. J.
+Gray, D. Gront, S. Guffy, S. Horowitz, P.-S. Huang, T. Huber, T. M. Jacobs, J. R.
+Jeliazkov, D. K. Johnson, K. Kappel, J. Karanicolas, H. Khakzad, K. R. Khar, S. D.
+Khare, F. Khatib, A. Khramushin, I. C. King, R. Kleffner, B. Koepnick, T.
+Kortemme, G. Kuenze, B. Kuhlman, D. Kuroda, J. W. Labonte, J. K. Lai, G.
+Lapidoth, A. Leaver-Fay, S. Lindert, T. Linsky, N. London, J. H. Lubin, S. Lyskov, J.
+Maguire, L. Malmström, E. Marcos, O. Marcu, N. A. Marze, J. Meiler, R. Moretti, V.
+K. Mulligan, S. Nerli, C. Norn, S. Ó’Conchúir, N. Ollikainen, S. Ovchinnikov, M. S.
+Pacella, X. Pan, H. Park, R. E. Pavlovicz, M. Pethe, B. G. Pierce, K. B. Pilla, B.
+Raveh, P. D. Renfrew, S. S. R. Burman, A. Rubenstein, M. F. Sauer, A. Scheck, W.
+Schief, O. Schueler-Furman, Y. Sedan, A. M. Sevy, N. G. Sgourakis, L. Shi, J. B.
+Siegel, D.-A. Silva, S. Smith, Y. Song, A. Stein, M. Szegedy, F. D. Teets, S. B.
+Thyme, R. Y.-R. Wang, A. Watkins, L. Zimmerman, R. Bonneau, Macromolecular
+modeling and design in Rosetta: Recent methods and frameworks. Nat. Methods 17,
+665–680 (2020). doi:10.1038/s41592-020-0848-2 Medline
+13. M. Baek, F. DiMaio, I. Anishchenko, J. Dauparas, S. Ovchinnikov, G. R. Lee, J. Wang,
+Q. Cong, L. N. Kinch, R. D. Schaeffer, C. Millán, H. Park, C. Adams, C. R.
+Glassman, A. DeGiovanni, J. H. Pereira, A. V. Rodrigues, A. A. van Dijk, A. C.
+Ebrecht, D. J. Opperman, T. Sagmeister, C. Buhlheller, T. Pavkov-Keller, M. K.
+Rathinaswamy, U. Dalwadi, C. K. Yip, J. E. Burke, K. C. Garcia, N. V. Grishin, P. D.
+Adams, R. J. Read, D. Baker, Accurate prediction of protein structures and
+interactions using a three-track neural network. Science 373, 871–876 (2021).
+doi:10.1126/science.abj8754 Medline
+14. V. Mariani, M. Biasini, A. Barbato, T. Schwede, lDDT: A local superposition-free score
+for comparing protein structures and models using distance difference tests.
+Bioinformatics 29, 2722–2728 (2013). doi:10.1093/bioinformatics/btt473 Medline
+15. B. I. M. Wicky, L. F. Milles, A. Courbet, R. J. Ragotte, J. Dauparas, E. Kinfu, S. Tipps,
+R. D. Kibler, M. Baek, F. DiMaio, X. Li, L. Carter, A. Kang, H. Nguyen, A. K. Bera,
+D. Baker, Hallucinating symmetric protein assemblies. Science 378, 56–61 (2022).
+doi:10.1126/science.add1964
+16. N. P. King, J. B. Bale, W. Sheffler, D. E. McNamara, S. Gonen, T. Gonen, T. O. Yeates,
+D. Baker, Accurate design of co-assembling multi-component protein nanomaterials.
+Nature 510, 103–108 (2014). doi:10.1038/nature13404 Medline
+17. S. Boyoglu-Barnum, D. Ellis, R. A. Gillespie, G. B. Hutchinson, Y.-J. Park, S. M. Moin,
+O. J. Acton, R. Ravichandran, M. Murphy, D. Pettie, N. Matheson, L. Carter, A.
+Creanga, M. J. Watson, S. Kephart, S. Ataca, J. R. Vaile, G. Ueda, M. C. Crank, L.
+Stewart, K. K. Lee, M. Guttman, D. Baker, J. R. Mascola, D. Veesler, B. S. Graham,
+N. P. King, M. Kanekiyo, Quadrivalent influenza nanoparticle vaccines induce broad
+protection. Nature 592, 623–628 (2021). doi:10.1038/s41586-021-03365-x Medline
+18. A. C. Walls, B. Fiala, A. Schäfer, S. Wrenn, M. N. Pham, M. Murphy, L. V. Tse, L.
+Shehata, M. A. O’Connor, C. Chen, M. J. Navarro, M. C. Miranda, D. Pettie, R.
+Ravichandran, J. C. Kraft, C. Ogohara, A. Palser, S. Chalk, E.-C. Lee, K. Guerriero,
+E. Kepl, C. M. Chow, C. Sydeman, E. A. Hodge, B. Brown, J. T. Fuller, K. H. Dinnon
+III, L. E. Gralinski, S. R. Leist, K. L. Gully, T. B. Lewis, M. Guttman, H. Y. Chu, K.
+K. Lee, D. H. Fuller, R. S. Baric, P. Kellam, L. Carter, M. Pepper, T. P. Sheahan, D.
+
+Veesler, N. P. King, Elicitation of potent neutralizing antibody responses by designed
+protein nanoparticle vaccines for SARS-CoV-2. Cell 183, 1367–1382.e17 (2020).
+doi:10.1016/j.cell.2020.10.043 Medline
+19. J. Marcandalli, B. Fiala, S. Ols, M. Perotti, W. de van der Schueren, J. Snijder, E. Hodge,
+M. Benhaim, R. Ravichandran, L. Carter, W. Sheffler, L. Brunner, M. Lawrenz, P.
+Dubois, A. Lanzavecchia, F. Sallusto, K. K. Lee, D. Veesler, C. E. Correnti, L. J.
+Stewart, D. Baker, K. Loré, L. Perez, N. P. King, Induction of potent neutralizing
+antibody responses by a designed protein nanoparticle vaccine for respiratory
+syncytial virus. Cell 176, 1420–1431.e17 (2019). doi:10.1016/j.cell.2019.01.046
+Medline
+20. L. Cao, B. Coventry, I. Goreshnik, B. Huang, W. Sheffler, J. S. Park, K. M. Jude, I.
+Marković, R. U. Kadam, K. H. G. Verschueren, K. Verstraete, S. T. R. Walsh, N.
+Bennett, A. Phal, A. Yang, L. Kozodoy, M. DeWitt, L. Picton, L. Miller, E.-M.
+Strauch, N. D. DeBouver, A. Pires, A. K. Bera, S. Halabiya, B. Hammerson, W.
+Yang, S. Bernard, L. Stewart, I. A. Wilson, H. Ruohola-Baker, J. Schlessinger, S.
+Lee, S. N. Savvides, K. C. Garcia, D. Baker, Design of protein-binding proteins from
+the target structure alone. Nature 605, 551–560 (2022). doi:10.1038/s41586-02204654-9 Medline
+21. J. Dauparas, S. O, S. Duerr, dauparas/ProteinMPNN: ProteinMPNN (v1.0.0). Zenodo
+(2022); https://doi.org/10.5281/zenodo.6941302.
+22. A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. Kaiser, I.
+Polosukhin, “Attention is all you need” in Advances in Neural Information Processing
+Systems 30 (NeurIPS 2017), I. Guyon, U. Von Luxburg, S. Bengio, H. Wallach, R.
+Fergus, S. Vishwanathan, R. Garnett, Eds. (Neural Information Processing Systems
+Foundation, 2017), pp. 5999–6009.
+23. N. Srivastava, G. Hinton, A. Krizhevsky, I. Sutskever, R. Salakhutdinov, Dropout: A
+simple way to prevent neural networks from overfitting. J. Mach. Learn. Res. 15,
+1929–1958 (2014).
+24. C. Szegedy, V. Vanhoucke, S. Ioffe, J. Shlens, Z. Wojna, “Rethinking the inception
+architecture for computer vision” in Proceedings of the IEEE Conference on
+Computer Vision and Pattern Recognition (IEEE, 2016), pp. 2818–2826.
+25. M. Steinegger, J. Söding, MMseqs2 enables sensitive protein sequence searching for the
+analysis of massive data sets. Nat. Biotechnol. 35, 1026–1028 (2017).
+doi:10.1038/nbt.3988 Medline
+26. Y. Zhang, J. Skolnick, TM-align: A protein structure alignment algorithm based on the
+TM-score. Nucleic Acids Res. 33, 2302–2309 (2005). doi:10.1093/nar/gki524 Medline
+27. A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N.
+Gimelshein, L. Antiga, A. Desmaison, A. Kopf, E. Yang, Z. Devito, M. Raison, A.
+Tejani, S. Chilamkurth, “Pytorch: An imperative style, high-performance deep
+learning library” in Advances in Neural Information Processing Systems 32 (NeurIPS
+2019), H. Wallach, H. Larochelle, A. Beygelzimer, F. d’Alché-Buc, E. Fox, R.
+Garnett, Eds. (Neural Information Processing Systems Foundation, 2019), pp. 7994–
+8005.
+28. J. Gilmer, S. S. Schoenholz, P. F. Riley, O. Vinyals, G. E. Dahl, “Neural message passing
+for quantum chemistry” in Proceedings of the 34th International Conference on
+Machine Learning, D. Precup, Y. W. The, Eds. (JMLR, 2017), pp. 1263–1272.
+
+29. B. Dang, M. Mravic, H. Hu, N. Schmidt, B. Mensa, W. F. DeGrado, SNAC-tag for
+sequence-specific chemical protein cleavage. Nat. Methods 16, 319–322 (2019).
+doi:10.1038/s41592-019-0357-3 Medline
+30. W. Kabsch, XDS. Acta Crystallogr. D Biol. Crystallogr. 66, 125–132 (2010).
+doi:10.1107/S0907444909047337 Medline
+31. M. D. Winn, C. C. Ballard, K. D. Cowtan, E. J. Dodson, P. Emsley, P. R. Evans, R. M.
+Keegan, E. B. Krissinel, A. G. W. Leslie, A. McCoy, S. J. McNicholas, G. N.
+Murshudov, N. S. Pannu, E. A. Potterton, H. R. Powell, R. J. Read, A. Vagin, K. S.
+Wilson, Overview of the CCP4 suite and current developments. Acta Crystallogr. D
+Biol. Crystallogr. 67, 235–242 (2011). doi:10.1107/S0907444910045749 Medline
+32. A. J. McCoy, R. W. Grosse-Kunstleve, P. D. Adams, M. D. Winn, L. C. Storoni, R. J.
+Read, Phaser crystallographic software. J. Appl. Crystallogr. 40, 658–674 (2007).
+doi:10.1107/S0021889807021206 Medline
+33. P. Emsley, K. Cowtan, Coot: Model-building tools for molecular graphics. Acta
+Crystallogr. D Biol. Crystallogr. 60, 2126–2132 (2004).
+doi:10.1107/S0907444904019158 Medline
+34. P. D. Adams, P. V. Afonine, G. Bunkóczi, V. B. Chen, I. W. Davis, N. Echols, J. J.
+Headd, L.-W. Hung, G. J. Kapral, R. W. Grosse-Kunstleve, A. J. McCoy, N. W.
+Moriarty, R. Oeffner, R. J. Read, D. C. Richardson, J. S. Richardson, T. C.
+Terwilliger, P. H. Zwart, PHENIX: A comprehensive Python-based system for
+macromolecular structure solution. Acta Crystallogr. D Biol. Crystallogr. 66, 213–
+221 (2010). doi:10.1107/S0907444909052925 Medline
+35. C. J. Williams, J. J. Headd, N. W. Moriarty, M. G. Prisant, L. L. Videau, L. N. Deis, V.
+Verma, D. A. Keedy, B. J. Hintze, V. B. Chen, S. Jain, S. M. Lewis, W. B. Arendall
+III, J. Snoeyink, P. D. Adams, S. C. Lovell, J. S. Richardson, D. C. Richardson,
+MolProbity: More and better reference data for improved all-atom structure
+validation. Protein Sci. 27, 293–315 (2018). doi:10.1002/pro.3330 Medline
+
+
