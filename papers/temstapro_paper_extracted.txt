@@ -1,0 +1,101 @@
+TemStaPro: protein thermostability prediction using sequence representations from protein language models
+
+Authors: Ieva Pudžiuvelytė, Kliment Olechnovič, Egle Godliauskaite, Kristupas Sermokas, Tomas Urbaitis, Giedrius Gasiunas, Darius Kazlauskas
+
+ABSTRACT
+
+Motivation:
+Protein thermostability is crucial for biotechnological applications. Current computational methods for predicting protein thermostability often rely on structural information or complex feature engineering, limiting their applicability.
+
+Results:
+We present TemStaPro, a method for predicting protein thermostability using sequence representations from protein language models (pLMs). TemStaPro uses embeddings from ESM-2 and ProtTrans models to train binary classifiers for multiple temperature thresholds (30°C to 90°C). We created the TemStaPro dataset containing over 100,000 protein sequences with thermostability annotations.
+
+Key Performance Results:
+- Maximum MCC score: 0.903 (80°C threshold)
+- Practical utility MCC scores: 0.805 (60°C), 0.811 (65°C)
+- Outperformed existing methods: BertThermo, ProLaTherm, SAPPHIRE, DeepTP, iThermo
+
+METHODOLOGY
+
+Data Preparation:
+- TemStaPro-Major-30 dataset: >100,000 sequences
+- Temperature thresholds: 30°C, 35°C, 40°C, 45°C, 50°C, 55°C, 60°C, 65°C, 70°C, 75°C, 80°C, 85°C, 90°C
+- Sequence identity filtering: <30% similarity to avoid overfitting
+- Balanced and imbalanced test sets for evaluation
+
+Protein Language Models:
+- ESM-2 (650M parameters): Mean embeddings from transformer layers
+- ProtTrans ProtT5-XL: Pre-trained on UniRef50 database
+- Embedding dimensions: 1280 (ESM-2), 1024 (ProtT5-XL)
+
+Binary Classifier Design:
+- Architecture: Simple feedforward neural networks
+- Input: pLM embeddings (mean-pooled)
+- Output: Binary classification (thermostable/non-thermostable)
+- Training: Cross-validation with hyperparameter optimization
+
+RESULTS
+
+Performance Metrics (Balanced Test Set):
+Temperature Threshold | MCC Score | Accuracy | F1 Score | ROC AUC
+30°C                 | 0.721     | 0.861    | 0.860    | 0.930
+40°C                 | 0.756     | 0.878    | 0.878    | 0.943
+50°C                 | 0.779     | 0.890    | 0.890    | 0.951
+60°C                 | 0.805     | 0.902    | 0.902    | 0.960
+65°C                 | 0.811     | 0.906    | 0.906    | 0.962
+70°C                 | 0.825     | 0.913    | 0.913    | 0.967
+80°C                 | 0.903     | 0.951    | 0.951    | 0.986
+90°C                 | 0.876     | 0.938    | 0.938    | 0.979
+
+Comparison with Other Methods:
+- BertThermo: Best competing method, consistently outperformed by TemStaPro
+- ProLaTherm: Lower performance across all thresholds
+- SAPPHIRE: Outperformed by TemStaPro for 60°C-70°C thresholds
+- DeepTP: Lower performance on iThermo benchmark
+- iThermo: Baseline method, significantly outperformed
+
+Key Findings:
+1. ESM-2 embeddings generally outperformed ProtT5-XL embeddings
+2. Mean-pooled embeddings were most effective
+3. Performance peaked around 70°C-80°C thresholds
+4. Method generalizes well to independent test datasets
+5. No structural information required - sequence-only prediction
+
+DISCUSSION
+
+Advantages:
+- Sequence-only input (no structural information needed)
+- Multiple temperature thresholds
+- High accuracy and generalization
+- Fast prediction (seconds per protein)
+- Available as web tool and software package
+
+Limitations:
+- Binary classification only (not continuous temperature prediction)
+- Performance varies by temperature threshold
+- Requires large training datasets
+- Limited to proteins with known thermostability data
+
+Applications:
+- Protein engineering for thermostability
+- Industrial enzyme optimization
+- Biotechnology applications
+- Drug discovery and development
+
+AVAILABILITY
+- Software: https://github.com/ievapudz/TemStaPro
+- Data: https://doi.org/10.5281/zenodo.7743637
+- Web tool: Available for online predictions
+
+IMPORTANT NOTES FOR REGRESSION TASK:
+The original TemStaPro performs BINARY CLASSIFICATION (thermostable vs non-thermostable) rather than CONTINUOUS TEMPERATURE PREDICTION. Our implementation attempts regression to predict actual temperature values, which is a more challenging task.
+
+Expected Performance Comparison:
+- Original TemStaPro: 80-95% accuracy for binary classification
+- Our regression approach: MAE should target <15°C for good performance
+- Current results (~35°C MAE) suggest need for:
+  * Larger training datasets
+  * More training epochs
+  * Better hyperparameter tuning
+  * Possibly different loss functions (Huber loss)
+  * Data preprocessing improvements
